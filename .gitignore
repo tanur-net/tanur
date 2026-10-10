@@ -1,0 +1,12 @@
+# Build output
+bin/
+dist/
+
+# Secrets / local config (defense in depth; none are tracked)
+*.key
+*.pem
+.env
+secrets/
+
+# OS
+.DS_Store

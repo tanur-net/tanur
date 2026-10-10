@@ -1,0 +1,40 @@
+Tanur — anti-censorship transport engine and reference client
+Copyright (c) the Tanur authors.
+
+This product is licensed under the Mozilla Public License 2.0 (see LICENSE).
+
+------------------------------------------------------------------------
+OFFICIAL RELEASES ARE SIGNED
+------------------------------------------------------------------------
+
+Tanur is a censorship-circumvention tool. Hostile parties have an incentive to
+distribute trojaned builds under its name. Protect yourself:
+
+  * Official releases are cryptographically signed and published ONLY through
+    the official channel:
+
+        OFFICIAL_RELEASE_CHANNEL_PLACEHOLDER
+        (set to the real URL/handle before the first public release)
+
+  * Every official release ships a SHA256SUMS file and a detached signature
+    over it. Verify both before running a binary. See RELEASING.md for the
+    exact commands and the signing public key.
+
+  * A build obtained from any other source, or one whose checksum or signature
+    does not verify, should be treated as hostile. Do not run it.
+
+If you redistribute Tanur (as MPL-2.0 permits), please make clear that your
+build is not the official signed release, so users can tell the difference.
+
+------------------------------------------------------------------------
+THIRD-PARTY DEPENDENCIES
+------------------------------------------------------------------------
+
+Tanur builds on open-source libraries, each under its own license, including:
+
+  * github.com/flynn/noise          (BSD-3-Clause)
+  * github.com/hashicorp/yamux      (MPL-2.0)
+  * golang.org/x/crypto             (BSD-3-Clause)
+
+See each dependency's module for its full license text. This list is a summary,
+not a substitute for those licenses.
