@@ -11,10 +11,9 @@ Tanur is a censorship-circumvention tool. Hostile parties have an incentive to
 distribute trojaned builds under its name. Protect yourself:
 
   * Official releases are cryptographically signed and published ONLY through
-    the official channel:
+    the official channel, the project's Releases page:
 
-        OFFICIAL_RELEASE_CHANNEL_PLACEHOLDER
-        (set to the real URL/handle before the first public release)
+        https://github.com/tanur-net/tanur/releases
 
   * Every official release ships a SHA256SUMS file and a detached signature
     over it. Verify both before running a binary. See RELEASING.md for the

@@ -73,9 +73,10 @@ file below. Never commit the secret key.
 
 ### Release signing public key
 
+minisign public key (PUBLIC and safe to share):
+
 ```
-RELEASE_SIGNING_PUBLIC_KEY_PLACEHOLDER
-(paste the minisign public key here once generated; this is PUBLIC and safe)
+RWQuWxwBBs2Z9+yiYZjqEDV9BGzVgXDuWUUaP+5XwqwdQ7cfSz8qlL7k
 ```
 
 ## 5. Publish
@@ -91,16 +92,20 @@ Upload, through the official channel only (see `NOTICE`):
 
 ```bash
 # 1. check the signature on the checksum file
-minisign -Vm SHA256SUMS -P <release public key>
+minisign -Vm SHA256SUMS -P RWQuWxwBBs2Z9+yiYZjqEDV9BGzVgXDuWUUaP+5XwqwdQ7cfSz8qlL7k
 # 2. check the binaries against the checksums
 sha256sum -c SHA256SUMS
 ```
 
 If either step fails, the build is not an official Tanur release. Do not run it.
 
-## Manual decisions before the first release
+## Status
 
-- Replace `SECURITY_CONTACT_PLACEHOLDER` in `SECURITY.md`.
-- Replace `OFFICIAL_RELEASE_CHANNEL_PLACEHOLDER` in `NOTICE`.
-- Generate the release key and paste its public half above.
-- Confirm the license (MPL-2.0) and the module path / repository host.
+- License confirmed: MPL-2.0.
+- Module path / host: `github.com/tanur-net/tanur`.
+- Release signing key generated; its public half is recorded above.
+- Security reports: GitHub private vulnerability reporting (Security tab).
+- Official channel: the repository's Releases page.
+
+Remaining before the first public release: flip the repository to public (an
+explicit, deliberate step the owner performs).

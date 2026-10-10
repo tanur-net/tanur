@@ -7,16 +7,10 @@ seriously and practice coordinated disclosure.
 
 **Do not open a public issue for a security problem.**
 
-Preferred: use GitHub's private vulnerability reporting ("Report a vulnerability"
-on the Security tab of this repository).
-
-Alternatively, email the security contact:
-
-> **`SECURITY_CONTACT_PLACEHOLDER`** — replace with the official address before
-> the first public release (see RELEASING.md).
-
-If you need to send sensitive details, ask us for a public key in your first
-message and we will provide one.
+Use GitHub's private vulnerability reporting: open the **Security** tab of this
+repository and click **"Report a vulnerability"**. This opens a private advisory
+visible only to the maintainers, so you can share details safely without
+disclosing them publicly.
 
 Please include: the affected version/commit, a description, reproduction steps or
 a proof of concept, and the impact you foresee. Please give us a reasonable time
