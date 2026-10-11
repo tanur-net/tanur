@@ -45,7 +45,7 @@ type Recipe struct {
 	Pad IntDist `json:"pad"`
 	// Open is the opening-window policy: the first few frames are kept small, so
 	// the early UPSTREAM stays under the operator's initial-upload trip (e.g.
-	// Irancell's ~6-packet upload limit, docs/measurements/2026-10-05-field-intel-patt)
+	// Irancell's ~6-packet upload limit, field intel from Iran)
 	// and the flow's start also looks like a real TLS handshake plus a small
 	// request before bulk data. Zero value = no opening window (back-compatible).
 	Open OpenParams `json:"open"`
@@ -78,7 +78,7 @@ type SkinParams struct {
 	// ECHConfigList is an optional base64 (std) ECHConfigList. When set, the skin
 	// client encrypts its ClientHello so the real SNI never appears in clear.
 	// Field intel shows ECH is a working bypass on MCI where plain SNI is read
-	// (docs/measurements/2026-10-05-field-intel-patt). Empty = no ECH.
+	// (observed in field intel from Iran). Empty = no ECH.
 	ECHConfigList string `json:"ech_config_list,omitempty"`
 	// DoorSecret is the per-deployment shared secret the skin client proves it
 	// knows to be upgraded from the real website to the inner channel. It is not

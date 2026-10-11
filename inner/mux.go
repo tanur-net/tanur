@@ -3,6 +3,8 @@
 package inner
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"io"
 	"os"
 	"time"
@@ -42,11 +44,13 @@ type Mux struct {
 // redial happens. The pings ride INSIDE the TLS tunnel, so to an observer they
 // are indistinguishable from the keepalives real long-lived HTTPS connections
 // send (HTTP/2 PING, WebSocket ping); they are not an outer-channel signature.
-// (A recipe-driven, jittered interval is a future refinement over the fixed one.)
+// The interval is jittered per session so the in-tunnel ping is not a fixed
+// 30s beat (a timing pattern even when encrypted); a recipe-driven interval is a
+// further refinement over this per-session jitter.
 func muxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
 	c.EnableKeepAlive = true
-	c.KeepAliveInterval = 30 * time.Second
+	c.KeepAliveInterval = jitterInterval(30*time.Second, 10*time.Second)
 	c.ConnectionWriteTimeout = 30 * time.Second
 	// Silenced in production; set TANUR_MUX_DEBUG=1 to surface yamux's own
 	// session diagnostics (keepalive failures, protocol errors, shutdown reasons)
@@ -57,6 +61,18 @@ func muxConfig() *yamux.Config {
 		c.LogOutput = io.Discard
 	}
 	return c
+}
+
+// jitterInterval returns base ± up to spread, drawn with crypto/rand, so each
+// session's keepalive cadence differs. On a rand failure it returns base.
+func jitterInterval(base, spread time.Duration) time.Duration {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return base
+	}
+	n := int64(binary.BigEndian.Uint64(b[:]) & (1<<62 - 1)) // non-negative
+	off := time.Duration(n%int64(2*spread+1)) - spread      // in [-spread, +spread]
+	return base + off
 }
 
 // ClientMux turns an established client Conn into a multiplexed session. The

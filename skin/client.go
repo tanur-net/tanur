@@ -3,6 +3,7 @@
 package skin
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -11,12 +12,19 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 
 	"github.com/tanur-net/tanur/inner"
 	"github.com/tanur-net/tanur/recipe"
 )
+
+// DialPhaseTimeout bounds the whole dial PHASE (TCP connect + TLS + door + inner
+// handshake). It is cleared once the channel is up, so a long-lived stream is
+// never cut by it. Under censorship, packets are dropped silently, so without
+// this a single dial could hang forever and block failover to the next path.
+const DialPhaseTimeout = 15 * time.Second
 
 // ClientConfig configures the outer skin client.
 type ClientConfig struct {
@@ -124,12 +132,30 @@ func (c *ClientConfig) handshake(raw net.Conn) (net.Conn, error) {
 }
 
 // Dial opens the outer TLS connection, presents the door, and returns an
-// established inner Conn ready for application data.
+// established inner Conn ready for application data. It uses a background context
+// with the default dial-phase timeout.
 func (c *ClientConfig) Dial() (*inner.Conn, error) {
-	raw, err := net.Dial("tcp", c.Addr)
+	return c.DialContext(context.Background())
+}
+
+// DialContext is Dial with a caller context for cancellation. The TCP connect
+// honors ctx (and a connect timeout), and the handshake phase (TLS + door +
+// inner) runs under a deadline — the smaller of DialPhaseTimeout and any ctx
+// deadline — which is CLEARED before the established stream is returned, so the
+// dial budget never cuts a long-lived stream.
+func (c *ClientConfig) DialContext(ctx context.Context) (*inner.Conn, error) {
+	d := net.Dialer{Timeout: DialPhaseTimeout}
+	raw, err := d.DialContext(ctx, "tcp", c.Addr)
 	if err != nil {
 		return nil, &stageErr{stage: "tcp", err: err}
 	}
+
+	deadline := time.Now().Add(DialPhaseTimeout)
+	if d2, ok := ctx.Deadline(); ok && d2.Before(deadline) {
+		deadline = d2
+	}
+	_ = raw.SetDeadline(deadline)
+
 	tc, err := c.handshake(raw)
 	if err != nil {
 		raw.Close()
@@ -146,6 +172,7 @@ func (c *ClientConfig) Dial() (*inner.Conn, error) {
 		tc.Close()
 		return nil, &stageErr{stage: "inner", err: err}
 	}
+	_ = raw.SetDeadline(time.Time{}) // clear: the stream is unbounded from here
 	return conn, nil
 }
 

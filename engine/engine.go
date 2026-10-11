@@ -89,7 +89,7 @@ type Engine struct {
 	cfg      Config
 	ladder   *brain.Ladder
 	client   *http.Client
-	reporter string // rotating, non-identifying token for telemetry dedup
+	reporter string        // rotating, non-identifying token for telemetry dedup
 	meter    *tunnel.Meter // app bytes carried by the local SOCKS proxy
 	// recipe is the effective shaping recipe (with skin door). It starts as
 	// Config.Recipe and is replaced by the signed recipe the brain serves when
@@ -138,6 +138,13 @@ func New(cfg Config) (*Engine, error) {
 		client = &http.Client{Transport: &http.Transport{
 			DisableCompression: true,
 			DisableKeepAlives:  true,
+			// Bound establishment (connect, TLS, time-to-response-headers) so a
+			// silent drop can't hang a carrier/bundle/telemetry request forever.
+			// ResponseHeaderTimeout caps time-to-headers, not the streaming body,
+			// so a carrier's long down-stream is never cut.
+			DialContext:           (&net.Dialer{Timeout: skin.DialPhaseTimeout}).DialContext,
+			TLSHandshakeTimeout:   skin.DialPhaseTimeout,
+			ResponseHeaderTimeout: skin.DialPhaseTimeout,
 		}}
 	}
 	return &Engine{cfg: cfg, client: client, reporter: randToken(), repRotate: time.Now(), meter: &tunnel.Meter{}, recipe: cfg.Recipe}, nil
@@ -384,11 +391,11 @@ func (e *Engine) dialerFor(ep brain.PoolEndpoint) func(context.Context) (io.Read
 		}
 	case "skin":
 		return func(ctx context.Context) (io.ReadWriteCloser, error) {
-			return e.dialSkin(ep)
+			return e.dialSkin(ctx, ep)
 		}
 	default: // "direct"
 		return func(ctx context.Context) (io.ReadWriteCloser, error) {
-			var d net.Dialer
+			d := net.Dialer{Timeout: skin.DialPhaseTimeout}
 			raw, err := d.DialContext(ctx, "tcp", ep.URL)
 			if err != nil {
 				return nil, brain.Staged("tcp", err)
@@ -396,11 +403,18 @@ func (e *Engine) dialerFor(ep brain.PoolEndpoint) func(context.Context) (io.Read
 			if tc, ok := raw.(*net.TCPConn); ok {
 				tc.SetNoDelay(true)
 			}
+			// Bound the inner handshake, then clear so the stream is unbounded.
+			deadline := time.Now().Add(skin.DialPhaseTimeout)
+			if d2, ok := ctx.Deadline(); ok && d2.Before(deadline) {
+				deadline = d2
+			}
+			_ = raw.SetDeadline(deadline)
 			ic, err := inner.Client(raw, ep.ServerPub, e.recipe)
 			if err != nil {
 				raw.Close()
 				return nil, brain.Staged("inner", err)
 			}
+			_ = raw.SetDeadline(time.Time{})
 			return ic, nil
 		}
 	}
@@ -411,7 +425,7 @@ func (e *Engine) dialerFor(ep brain.PoolEndpoint) func(context.Context) (io.Read
 // channel. The public endpoint supplies only the address and SNI; the door
 // secret and ECH config come from the SIGNED recipe, never the public endpoint
 // list, so no secret rides in an assignment (CLAUDE.md rule 8 / S7).
-func (e *Engine) dialSkin(ep brain.PoolEndpoint) (io.ReadWriteCloser, error) {
+func (e *Engine) dialSkin(ctx context.Context, ep brain.PoolEndpoint) (io.ReadWriteCloser, error) {
 	sni := ep.SNI
 	if sni == "" {
 		sni = e.recipe.Skin.ServerName
@@ -447,7 +461,7 @@ func (e *Engine) dialSkin(ep brain.PoolEndpoint) (io.ReadWriteCloser, error) {
 		ECHConfigList: ech,
 		ClientHelloID: helloID,
 	}
-	conn, err := cc.Dial()
+	conn, err := cc.DialContext(ctx)
 	if err != nil {
 		// skin.DialStage tells us which phase failed (tcp/tls/door/inner) so
 		// telemetry can distinguish e.g. an SNI/TLS reset from an inner block.

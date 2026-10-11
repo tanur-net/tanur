@@ -180,8 +180,8 @@ func TestSessionByteBoundEnforced(t *testing.T) {
 
 func TestSessionTimeBoundEnforced(t *testing.T) {
 	r := testRecipe()
-	r.Session.MaxSeconds = 1       // 1 second of REAL time
-	r.Session.MaxBytes = 1 << 30   // make bytes effectively unlimited
+	r.Session.MaxSeconds = 1     // 1 second of REAL time
+	r.Session.MaxBytes = 1 << 30 // make bytes effectively unlimited
 	sh, _ := New(r, nonce(5))
 
 	// Inject a controllable clock: wall-clock only moves when we move it, so the

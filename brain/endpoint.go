@@ -21,7 +21,7 @@ type PoolEndpoint struct {
 	ServerPub []byte `json:"server_pub"`
 	Burned    bool   `json:"-"` // globally burned (dead on every operator); never serialized out
 	// BurnedOn marks operators where this endpoint is dead while it may still be
-	// fine elsewhere. Field intel (docs/measurements/2026-10-05-field-intel-patt)
+	// fine elsewhere. Field intel from Iran
 	// shows an IP can be throttled/blocked on Irancell yet clean on MCI, so burn
 	// must be per operator; a global Burn is reserved for an IP dead everywhere.
 	BurnedOn map[string]bool `json:"-"`

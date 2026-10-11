@@ -4,6 +4,7 @@ package skin
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -21,6 +22,44 @@ import (
 	"github.com/tanur-net/tanur/inner"
 	"github.com/tanur-net/tanur/recipe"
 )
+
+// A server that completes the TCP handshake but then goes silent — exactly what a
+// censor does when it drops the TLS handshake — must make DialContext fail on its
+// deadline, not hang forever (which would block failover to the next endpoint).
+func TestDialContextBoundsTheDialPhase(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c // hold the connection open and never speak
+		}
+	}()
+
+	cc := &ClientConfig{
+		Addr:       ln.Addr().String(),
+		TLS:        &tls.Config{ServerName: "localhost", InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+		ServerPub:  make([]byte, 32),
+		Recipe:     testRecipe(),
+		DoorSecret: doorSecret,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := cc.DialContext(ctx); err == nil {
+		t.Fatal("dial to a silent server should fail, not hang")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("dial did not respect its deadline: took %v", elapsed)
+	}
+}
 
 // selfSigned makes a throwaway cert for "localhost" so the loopback test has a
 // real TLS handshake. Production uses a real cert for the real domain.
