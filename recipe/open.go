@@ -14,10 +14,6 @@ import (
 // censor or a malicious host cannot inject a recipe that weakens the client
 // (e.g. one that downgrades the skin or leaks a fixed constant). Signing keys
 // live with the brain, never in the client or this package.
-//
-// This file is the client-side (open) half: the signed envelope shape and the
-// verify. The sign counterpart (Seal) is the server's and is withheld from the
-// open release — see seal.go. (docs/oss/split-plan.md)
 
 // Signed wraps a recipe with a detached Ed25519 signature over its canonical
 // JSON encoding.

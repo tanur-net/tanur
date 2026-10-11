@@ -26,6 +26,16 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
+)
+
+// Server resource bounds. A carrier session is "half-open" until BOTH its up and
+// down requests have arrived; without limits, an attacker (or a flaky CDN) that
+// sends only one side for many distinct sids would pin unbounded sessions and
+// handlers in memory — a cheap denial of service. These cap the exposure.
+const (
+	defaultMaxSessions     = 2048
+	defaultHalfOpenTimeout = 30 * time.Second
 )
 
 // Conn is a bidirectional byte stream over HTTP (io.ReadWriteCloser).
@@ -104,6 +114,13 @@ type HTTPServer struct {
 	// Handle runs the stack (inner.Server + mux + exit) on each carrier Conn.
 	Handle func(io.ReadWriteCloser)
 
+	// MaxSessions caps concurrent (including half-open) sessions; 0 uses the
+	// default. A new session beyond the cap is refused with 503.
+	MaxSessions int
+	// HalfOpenTimeout is how long a session may wait for its second half before
+	// it is reaped; 0 uses the default.
+	HalfOpenTimeout time.Duration
+
 	mu   sync.Mutex
 	sess map[string]*session
 }
@@ -112,6 +129,7 @@ type session struct {
 	up        io.ReadCloser // server reads client->server here
 	down      io.Writer     // server writes server->client here
 	done      chan struct{} // closed when the Conn is closed
+	timer     *time.Timer   // half-open reaper; stopped once both halves arrive
 	fireOnce  sync.Once
 	closeOnce sync.Once
 }
@@ -123,7 +141,11 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad carrier request", http.StatusBadRequest)
 		return
 	}
-	sess := s.getOrCreate(sid)
+	sess, ok := s.getOrCreate(sid)
+	if !ok {
+		http.Error(w, "carrier busy", http.StatusServiceUnavailable)
+		return
+	}
 
 	switch dir {
 	case "down":
@@ -142,21 +164,57 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Block this HTTP handler until the Conn is closed, so the body stays open.
-	<-sess.done
+	// Also return if the client goes away, so a disconnect tears the session
+	// down instead of leaking it (and unblocks a half-open peer).
+	select {
+	case <-sess.done:
+	case <-r.Context().Done():
+		s.teardown(sid, sess)
+	}
 }
 
-func (s *HTTPServer) getOrCreate(sid string) *session {
+// getOrCreate returns the session for sid, creating it if new. It returns ok ==
+// false when a NEW session would exceed MaxSessions, so the handler can refuse
+// rather than grow without bound. A newly created session gets a half-open timer.
+func (s *HTTPServer) getOrCreate(sid string) (*session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sess == nil {
 		s.sess = make(map[string]*session)
 	}
-	se := s.sess[sid]
-	if se == nil {
-		se = &session{done: make(chan struct{})}
-		s.sess[sid] = se
+	if se := s.sess[sid]; se != nil {
+		return se, true
 	}
-	return se
+	max := s.MaxSessions
+	if max <= 0 {
+		max = defaultMaxSessions
+	}
+	if len(s.sess) >= max {
+		return nil, false
+	}
+	se := &session{done: make(chan struct{})}
+	s.sess[sid] = se
+	to := s.HalfOpenTimeout
+	if to <= 0 {
+		to = defaultHalfOpenTimeout
+	}
+	se.timer = time.AfterFunc(to, func() { s.teardown(sid, se) })
+	return se, true
+}
+
+// teardown removes a session and unblocks its handlers. It is idempotent and
+// safe whether the session fired or is still half-open: the half-open reaper,
+// a client disconnect, and normal completion all route through it.
+func (s *HTTPServer) teardown(sid string, se *session) {
+	s.mu.Lock()
+	if s.sess[sid] == se {
+		delete(s.sess, sid)
+	}
+	if se.timer != nil {
+		se.timer.Stop()
+	}
+	s.mu.Unlock()
+	se.closeOnce.Do(func() { close(se.done) })
 }
 
 func (s *HTTPServer) setUp(sid string, se *session, up io.ReadCloser) {
@@ -182,6 +240,13 @@ func (s *HTTPServer) setDown(sid string, se *session, down io.Writer) {
 // fire builds the Conn and calls Handle exactly once, then cleans up.
 func (s *HTTPServer) fire(sid string, se *session) {
 	se.fireOnce.Do(func() {
+		// Cancel the half-open reaper so it can't tear down a now-live session.
+		s.mu.Lock()
+		if se.timer != nil {
+			se.timer.Stop()
+		}
+		s.mu.Unlock()
+
 		conn := &Conn{
 			r: se.up,
 			w: se.down,
@@ -195,9 +260,7 @@ func (s *HTTPServer) fire(sid string, se *session) {
 				s.Handle(conn)
 			}
 			conn.Close()
-			s.mu.Lock()
-			delete(s.sess, sid)
-			s.mu.Unlock()
+			s.teardown(sid, se)
 		}()
 	})
 }

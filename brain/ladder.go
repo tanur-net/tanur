@@ -46,9 +46,11 @@ type Ladder struct {
 	clock    func() time.Time
 
 	// Report, if set, is called once per Dial for each endpoint tried, with the
-	// per-attempt outcome and whether the line was up at all (control = any
-	// endpoint in that Dial worked). The engine wires this to telemetry.
-	Report func(networkKey, epID string, ok, control bool)
+	// per-attempt outcome, whether the line was up at all (control = any endpoint
+	// in that Dial worked), and the phase a failure happened in (stage: "tcp",
+	// "tls", "door", "inner", or "" — from a Staged error; empty on success). The
+	// engine wires this to anonymous telemetry.
+	Report func(networkKey, epID string, ok, control bool, stage, reason string)
 
 	mu       sync.Mutex
 	eps      []Endpoint
@@ -77,8 +79,10 @@ func New(eps []Endpoint, cooldown time.Duration) *Ladder {
 // the endpoint that worked.
 func (l *Ladder) Dial(ctx context.Context, networkKey string) (io.ReadWriteCloser, string, error) {
 	type attempt struct {
-		id string
-		ok bool
+		id     string
+		ok     bool
+		stage  string // phase of failure (from a Staged error); "" on success
+		reason string // WHY it failed (from ReasonOf); "" on success
 	}
 	var attempts []attempt
 	var result io.ReadWriteCloser
@@ -93,18 +97,18 @@ func (l *Ladder) Dial(ctx context.Context, networkKey string) (io.ReadWriteClose
 		conn, err := ep.Dial(ctx)
 		if err == nil {
 			l.recordSuccess(networkKey, ep.ID)
-			attempts = append(attempts, attempt{ep.ID, true})
+			attempts = append(attempts, attempt{id: ep.ID, ok: true})
 			result, resultID, rerr = conn, ep.ID, nil
 			break
 		}
 		l.recordFailure(networkKey, ep.ID)
-		attempts = append(attempts, attempt{ep.ID, false})
+		attempts = append(attempts, attempt{id: ep.ID, ok: false, stage: StageOf(err), reason: ReasonOf(err)})
 	}
 
 	if l.Report != nil {
 		control := result != nil // line was up if any endpoint worked
 		for _, a := range attempts {
-			l.Report(networkKey, a.id, a.ok, control)
+			l.Report(networkKey, a.id, a.ok, control, a.stage, a.reason)
 		}
 	}
 	return result, resultID, rerr

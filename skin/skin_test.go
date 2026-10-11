@@ -161,6 +161,82 @@ func TestTanurClientGetsInnerChannel(t *testing.T) {
 	}
 }
 
+// With a browser fingerprint (uTLS), the outer handshake still reaches the inner
+// channel: the ClientHelloID path must stay functionally identical to plain TLS.
+func TestTanurClientUTLSFingerprint(t *testing.T) {
+	for _, fp := range []string{"chrome", "firefox", "safari", "edge", "ios"} {
+		t.Run(fp, func(t *testing.T) {
+			addr, pub, stop := startServer(t)
+			defer stop()
+
+			cc := &ClientConfig{
+				Addr:          addr,
+				TLS:           &tls.Config{ServerName: "localhost", InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+				ServerPub:     pub,
+				Recipe:        testRecipe(),
+				DoorSecret:    doorSecret,
+				ClientHelloID: fp,
+			}
+			conn, err := cc.Dial()
+			if err != nil {
+				t.Fatalf("dial with %s fingerprint: %v", fp, err)
+			}
+			defer conn.Close()
+
+			msg := bytes.Repeat([]byte("tanur over browser-skin "), 200)
+			go conn.Write(msg)
+
+			got := make([]byte, 0, len(msg))
+			buf := make([]byte, 4096)
+			for len(got) < len(msg) {
+				n, err := conn.Read(buf)
+				got = append(got, buf[:n]...)
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+			}
+			if !bytes.Equal(got, msg) {
+				t.Fatalf("echo mismatch with %s: %d vs %d", fp, len(got), len(msg))
+			}
+		})
+	}
+}
+
+// An unknown ClientHelloID must fail loudly at dial, not silently fall back to a
+// distinctive handshake.
+func TestUnknownClientHelloID(t *testing.T) {
+	addr, pub, stop := startServer(t)
+	defer stop()
+
+	cc := &ClientConfig{
+		Addr:          addr,
+		TLS:           &tls.Config{ServerName: "localhost", InsecureSkipVerify: true, MinVersion: tls.VersionTLS12},
+		ServerPub:     pub,
+		Recipe:        testRecipe(),
+		DoorSecret:    doorSecret,
+		ClientHelloID: "nope-not-a-browser",
+	}
+	if conn, err := cc.Dial(); err == nil {
+		conn.Close()
+		t.Fatal("unknown client_hello_id should have failed the dial")
+	}
+}
+
+// utlsHelloID resolves the names a recipe may carry and rejects the rest.
+func TestUTLSHelloIDMapping(t *testing.T) {
+	for _, name := range []string{"chrome", "Firefox", " safari ", "EDGE", "ios", "randomized", "golang"} {
+		if _, ok := utlsHelloID(name); !ok {
+			t.Errorf("expected %q to resolve to a uTLS profile", name)
+		}
+	}
+	if _, ok := utlsHelloID("internet-explorer"); ok {
+		t.Error("unknown profile should not resolve")
+	}
+	if _, ok := utlsHelloID(""); ok {
+		t.Error("empty profile should not resolve (caller uses plain TLS)")
+	}
+}
+
 // A browser (no door) gets the real site, not the inner channel.
 func TestBrowserGetsRealSite(t *testing.T) {
 	addr, _, stop := startServer(t)

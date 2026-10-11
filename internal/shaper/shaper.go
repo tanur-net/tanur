@@ -11,6 +11,7 @@ package shaper
 
 import (
 	"errors"
+	"time"
 
 	"github.com/tanur-net/tanur/recipe"
 )
@@ -21,9 +22,15 @@ type Shaper struct {
 	r         recipe.Recipe
 	s         *recipe.Sampler
 	sentB     int64 // bytes accounted so far (payload + padding)
-	elapsed   int   // conceptual ms accounted via pauses so far
 	burstLeft int   // frames remaining in the current burst
 	framesOut int   // frames planned so far (for the opening window)
+
+	// now and startedAt enforce MaxSeconds against REAL wall-clock time, not the
+	// sum of planned pauses (which a fast link would never accumulate, leaving a
+	// session effectively unbounded in time). now is injectable so tests stay
+	// deterministic; it defaults to time.Now. startedAt is stamped on first Next.
+	now       func() time.Time
+	startedAt time.Time
 }
 
 // ErrSessionExhausted is returned when the session's byte or time bound is hit.
@@ -40,7 +47,7 @@ func New(r recipe.Recipe, nonce []byte) (*Shaper, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Shaper{r: r, s: s}, nil
+	return &Shaper{r: r, s: s, now: time.Now}, nil
 }
 
 // Step is the plan for writing one frame.
@@ -64,10 +71,16 @@ func (s Step) Wire() int { return s.Payload + s.Pad }
 // want <= 0 is allowed and yields a keepalive-style frame carrying only padding,
 // so idle periods still look like ordinary traffic rather than silence.
 func (s *Shaper) Next(want int) (Step, error) {
+	if s.startedAt.IsZero() {
+		s.startedAt = s.now()
+	}
 	if s.sentB >= s.r.Session.MaxBytes {
 		return Step{}, ErrSessionExhausted
 	}
-	if s.elapsed >= s.r.Session.MaxSeconds*1000 {
+	// Real wall-clock lifetime, so a long-lived session can't dodge the bound by
+	// never pausing.
+	if s.r.Session.MaxSeconds > 0 &&
+		s.now().Sub(s.startedAt) >= time.Duration(s.r.Session.MaxSeconds)*time.Second {
 		return Step{}, ErrSessionExhausted
 	}
 
@@ -108,12 +121,25 @@ func (s *Shaper) Next(want int) (Step, error) {
 			pad = 0
 		}
 	}
+
+	// Never overshoot the byte bound: clamp this frame to the remaining budget,
+	// trimming padding first (it is dispensable) and then payload. Without this
+	// the final frame could push sentB past MaxBytes by up to one frame.
+	if budget := s.r.Session.MaxBytes - s.sentB; int64(payload+pad) > budget {
+		over := int64(payload+pad) - budget
+		if int64(pad) >= over {
+			pad -= int(over)
+		} else {
+			over -= int64(pad)
+			pad = 0
+			payload -= int(over)
+		}
+	}
 	s.framesOut++
 
 	// Account against the session bounds before returning, so the caller cannot
 	// overrun them by ignoring the error on a later call.
 	s.sentB += int64(payload + pad)
-	s.elapsed += pause
 
 	return Step{Payload: payload, Pad: pad, PauseMS: pause}, nil
 }

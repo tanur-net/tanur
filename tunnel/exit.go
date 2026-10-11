@@ -40,10 +40,15 @@ func handleExitStream(st io.ReadWriteCloser, dialTimeout time.Duration, logf fun
 		st.Close()
 		return
 	}
+	isUDP, hostPort := parseTarget(addr)
+	if isUDP {
+		exitUDP(st, hostPort, logf)
+		return
+	}
 	d := net.Dialer{Timeout: dialTimeout}
-	up, err := d.Dial("tcp", addr)
+	up, err := d.Dial("tcp", hostPort)
 	if err != nil {
-		logf("exit dial %s: %v", addr, err)
+		logf("exit dial %s: %v", hostPort, err)
 		st.Close()
 		return
 	}
@@ -51,6 +56,21 @@ func handleExitStream(st io.ReadWriteCloser, dialTimeout time.Duration, logf fun
 		tc.SetNoDelay(true)
 	}
 	pipe(st, up)
+}
+
+// exitUDP serves a UDP target stream: it dials the UDP destination and relays
+// length-prefixed datagrams between the mux stream and that socket. The socket
+// is closed when the stream ends or after udpIdle without a datagram, so a DNS
+// lookup's one round trip does not hold a socket open indefinitely.
+func exitUDP(st io.ReadWriteCloser, hostPort string, logf func(string, ...any)) {
+	defer st.Close()
+	up, err := net.Dial("udp", hostPort)
+	if err != nil {
+		logf("exit udp dial %s: %v", hostPort, err)
+		return
+	}
+	defer up.Close()
+	relayUDPOverStream(st, up.(*net.UDPConn))
 }
 
 // compile-time check that *inner.Mux is a StreamAccepter.

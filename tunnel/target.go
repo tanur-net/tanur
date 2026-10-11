@@ -18,11 +18,31 @@ import (
 // encrypted stream.
 //
 //	[2 bytes: length N][N bytes: "host:port"]
+//
+// A UDP target is the same header with the address prefixed by "udp:", e.g.
+// "udp:8.8.8.8:53". A plain "host:port" is TCP, so an older peer that never
+// sends the prefix keeps working unchanged. After the header a UDP stream
+// carries length-prefixed datagrams ([2 bytes len][datagram]) in both
+// directions; a TCP stream carries a raw byte pipe as before.
 
 const maxTargetLen = 1 << 10
 
+// udpPrefix marks a target header as UDP rather than TCP.
+const udpPrefix = "udp:"
+
 // ErrBadTarget is returned for a malformed or oversize target header.
 var ErrBadTarget = errors.New("tunnel: malformed target header")
+
+// udpTarget wraps a "host:port" as a UDP target header value.
+func udpTarget(hostPort string) string { return udpPrefix + hostPort }
+
+// parseTarget splits a target header value into (isUDP, "host:port").
+func parseTarget(addr string) (bool, string) {
+	if len(addr) > len(udpPrefix) && addr[:len(udpPrefix)] == udpPrefix {
+		return true, addr[len(udpPrefix):]
+	}
+	return false, addr
+}
 
 // writeTarget sends the target header on a stream.
 func writeTarget(w io.Writer, addr string) error {

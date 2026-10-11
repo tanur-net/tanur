@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -29,6 +30,41 @@ func failDial(id string, calls *[]string, mu *sync.Mutex) func(context.Context) 
 		*calls = append(*calls, id)
 		mu.Unlock()
 		return nil, errors.New("down")
+	}
+}
+
+// A staged dial failure must surface its phase to Report (for telemetry), while
+// a successful dial reports an empty stage.
+func TestDialReportsStage(t *testing.T) {
+	stagedDial := func(stage string) func(context.Context) (io.ReadWriteCloser, error) {
+		return func(context.Context) (io.ReadWriteCloser, error) {
+			// A real connection-reset so ReasonOf classifies via errors.Is, the
+			// path production hits — not a string match.
+			return nil, Staged(stage, syscall.ECONNRESET)
+		}
+	}
+	l := New([]Endpoint{
+		{ID: "a", Priority: 0, Dial: stagedDial("tls")},
+		{ID: "b", Priority: 1, Dial: func(context.Context) (io.ReadWriteCloser, error) { return fakeConn{}, nil }},
+	}, time.Minute)
+
+	got := map[string]string{}
+	gotReason := map[string]string{}
+	l.Report = func(networkKey, epID string, ok, control bool, stage, reason string) {
+		got[epID] = stage
+		gotReason[epID] = reason
+	}
+	if _, _, err := l.Dial(context.Background(), "mci"); err != nil {
+		t.Fatal(err)
+	}
+	if got["a"] != "tls" {
+		t.Fatalf("failed endpoint 'a' should report stage 'tls', got %q", got["a"])
+	}
+	if gotReason["a"] != "reset" {
+		t.Fatalf("failed endpoint 'a' should report reason 'reset', got %q", gotReason["a"])
+	}
+	if got["b"] != "" || gotReason["b"] != "" {
+		t.Fatalf("successful endpoint 'b' should report empty stage/reason, got %q/%q", got["b"], gotReason["b"])
 	}
 }
 

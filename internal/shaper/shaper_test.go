@@ -5,6 +5,7 @@ package shaper
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/tanur-net/tanur/recipe"
 )
@@ -170,27 +171,35 @@ func TestSessionByteBoundEnforced(t *testing.T) {
 	if !hit {
 		t.Fatal("session never hit its byte bound")
 	}
-	// Allow the final frame to cross the boundary, but not wildly.
-	if int64(total) > r.Session.MaxBytes+2000 {
+	// The frame is clamped to the remaining budget, so the session never puts
+	// more than MaxBytes on the wire — not even by one frame.
+	if int64(total) > r.Session.MaxBytes {
 		t.Fatalf("overran byte bound: %d vs %d", total, r.Session.MaxBytes)
 	}
 }
 
 func TestSessionTimeBoundEnforced(t *testing.T) {
 	r := testRecipe()
-	r.Session.MaxSeconds = 1 // 1000 ms budget
-	r.Pause = recipe.IntDist{Min: 40, Max: 40}
-	r.Session.MaxBytes = 1 << 30 // make bytes effectively unlimited
+	r.Session.MaxSeconds = 1       // 1 second of REAL time
+	r.Session.MaxBytes = 1 << 30   // make bytes effectively unlimited
 	sh, _ := New(r, nonce(5))
-	hit := false
-	for i := 0; i < 100000; i++ {
-		if _, err := sh.Next(10); err == ErrSessionExhausted {
-			hit = true
-			break
+
+	// Inject a controllable clock: wall-clock only moves when we move it, so the
+	// bound is real time, not the sum of planned pauses (which a fast link never
+	// accumulates). This is the regression test for that distinction.
+	cur := time.Unix(1_000_000, 0)
+	sh.now = func() time.Time { return cur }
+
+	// Many frames back-to-back with no real time elapsed must NOT exhaust.
+	for i := 0; i < 10000; i++ {
+		if _, err := sh.Next(10); err != nil {
+			t.Fatalf("no real time passed, frame %d should succeed, got %v", i, err)
 		}
 	}
-	if !hit {
-		t.Fatal("session never hit its time bound")
+	// Once real time crosses MaxSeconds, the very next frame is refused.
+	cur = cur.Add(1100 * time.Millisecond)
+	if _, err := sh.Next(10); err != ErrSessionExhausted {
+		t.Fatalf("after %ds of wall-clock, want ErrSessionExhausted, got %v", r.Session.MaxSeconds, err)
 	}
 }
 

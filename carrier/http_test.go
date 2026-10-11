@@ -5,6 +5,7 @@ package carrier
 import (
 	"bytes"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -13,6 +14,52 @@ import (
 	"github.com/tanur-net/tanur/inner"
 	"github.com/tanur-net/tanur/recipe"
 )
+
+func (s *HTTPServer) sessionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.sess)
+}
+
+// A session that only ever gets one of its two halves must be reaped, not pinned
+// in memory forever — the DoS that unbounded half-open sessions would allow.
+func TestHalfOpenSessionReaped(t *testing.T) {
+	hs := &HTTPServer{HalfOpenTimeout: 40 * time.Millisecond}
+	req := httptest.NewRequest("GET", "/?sid=solo&dir=down", nil)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { hs.ServeHTTP(rec, req); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("half-open session handler was never reaped")
+	}
+	if n := hs.sessionCount(); n != 0 {
+		t.Fatalf("reaped session still in map: %d", n)
+	}
+}
+
+// A new session beyond MaxSessions is refused with 503 rather than growing the
+// map without bound.
+func TestSessionCapRefuses(t *testing.T) {
+	hs := &HTTPServer{MaxSessions: 1, HalfOpenTimeout: time.Second}
+	// First (half-open) session takes the only slot; its handler blocks.
+	go hs.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/?sid=a&dir=down", nil))
+	deadline := time.Now().Add(time.Second)
+	for hs.sessionCount() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("first session never registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Second, distinct session must be refused.
+	rec := httptest.NewRecorder()
+	hs.ServeHTTP(rec, httptest.NewRequest("GET", "/?sid=b&dir=down", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("over-cap session: want 503, got %d", rec.Code)
+	}
+}
 
 func testRecipe() recipe.Recipe {
 	return recipe.Recipe{

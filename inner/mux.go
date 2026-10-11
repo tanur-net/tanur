@@ -4,6 +4,7 @@ package inner
 
 import (
 	"io"
+	"os"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -29,15 +30,32 @@ type Mux struct {
 	sess *yamux.Session
 }
 
-// muxConfig returns yamux settings tuned for a covert channel: keepalive is
-// disabled because its periodic pings would add a regular timing signature, and
-// logging is silenced. Flow-control windows are left at sane defaults; their
-// control frames are inside the encrypted stream.
+// muxConfig returns yamux settings for the covert channel. Logging is silenced
+// and flow-control control frames ride inside the encrypted stream.
+//
+// Keepalive is ENABLED. Measured on a real Android device: with it off, an idle
+// mux's underlying TLS connection is dropped by the network/NAT after minutes of
+// no traffic, and — without keepalive to notice — yamux keeps handing out
+// streams on the dead session, so the next request after an idle period silently
+// fails (the engine never learns to redial). Keepalive both refreshes the NAT
+// mapping so the idle connection survives and detects a genuinely dead one so a
+// redial happens. The pings ride INSIDE the TLS tunnel, so to an observer they
+// are indistinguishable from the keepalives real long-lived HTTPS connections
+// send (HTTP/2 PING, WebSocket ping); they are not an outer-channel signature.
+// (A recipe-driven, jittered interval is a future refinement over the fixed one.)
 func muxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
-	c.EnableKeepAlive = false
+	c.EnableKeepAlive = true
+	c.KeepAliveInterval = 30 * time.Second
 	c.ConnectionWriteTimeout = 30 * time.Second
-	c.LogOutput = io.Discard
+	// Silenced in production; set TANUR_MUX_DEBUG=1 to surface yamux's own
+	// session diagnostics (keepalive failures, protocol errors, shutdown reasons)
+	// on stderr when debugging a dead-channel problem on a device.
+	if os.Getenv("TANUR_MUX_DEBUG") != "" {
+		c.LogOutput = os.Stderr
+	} else {
+		c.LogOutput = io.Discard
+	}
 	return c
 }
 
